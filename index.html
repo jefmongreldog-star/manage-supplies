@@ -1,0 +1,477 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>備品・消耗品 管理アプリ</title>
+
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js" crossorigin></script>
+
+<!-- Firebase (compat build, easiest to combine with the script below) -->
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Zen+Kaku+Gothic+New:wght@400;500;700&family=JetBrains+Mono:wght@400;500;700&display=swap');
+  * { box-sizing: border-box; }
+  body { margin: 0; }
+  input:focus, select:focus, button:focus { outline: 2px solid #6E6852; outline-offset: 1px; }
+</style>
+</head>
+<body>
+
+<div id="root">
+  <div style="padding:40px;font-family:sans-serif;color:#6E6852;">読み込み中…</div>
+</div>
+
+<script>
+  // ------------------------------------------------------------------
+  // 1) Firebase の設定をここに貼り付けてください
+  //    Firebase コンソール > プロジェクトの設定 > 全般 > マイアプリ から取得できます
+  // ------------------------------------------------------------------
+  const firebaseConfig = {
+    apiKey: "AIzaSyBpun4Vvt65UDwFYHQ0IE2zGvaKA2mdJ9U",
+    authDomain: "manage-supplies.firebaseapp.com",
+    projectId: "manage-supplies",
+    storageBucket: "manage-supplies.firebasestorage.app",
+    messagingSenderId: "624069850997",
+    appId: "1:624069850997:web:2702ff67af089a0a54853c"
+  };
+  firebase.initializeApp(firebaseConfig);
+  const db = firebase.firestore();
+  const auth = firebase.auth();
+  window.__db = db;
+  window.__auth = auth;
+</script>
+
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useCallback } = React;
+const db = window.__db;
+const auth = window.__auth;
+
+const CATEGORY_PRESETS = ["キッチン", "洗面・浴室", "掃除用品", "文具・オフィス", "ペット用品", "その他"];
+const LOCATION_PRESETS = ["キッチン収納", "洗面台下", "納戸", "玄関", "その他"];
+const TAG_OPTIONS = ["消耗品", "備品"];
+
+const INPUT_STYLE = {
+  width: "100%",
+  padding: "8px 10px",
+  border: "1px solid var(--line)",
+  borderRadius: 2,
+  background: "var(--card)",
+  color: "var(--ink)",
+  fontFamily: "'Zen Kaku Gothic New', sans-serif",
+  fontSize: 14,
+  boxSizing: "border-box",
+};
+const LABEL_STYLE = {
+  fontFamily: "'JetBrains Mono', monospace",
+  fontSize: 10,
+  letterSpacing: "0.06em",
+  color: "var(--ink-soft)",
+  textTransform: "uppercase",
+  display: "block",
+  marginBottom: 4,
+};
+
+function resizeImage(file, maxDim, quality) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("read failed"));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error("image failed"));
+      img.onload = () => {
+        let { width, height } = img;
+        if (width > maxDim || height > maxDim) {
+          if (width > height) {
+            height = Math.round((height * maxDim) / width);
+            width = maxDim;
+          } else {
+            width = Math.round((width * maxDim) / height);
+            height = maxDim;
+          }
+        }
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL("image/jpeg", quality));
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+function ItemCard({ item, onDelete, onEdit }) {
+  return (
+    <div style={{ position: "relative", background: "var(--card)", border: "1px solid var(--line)", borderRadius: 3, padding: "16px 14px 14px", display: "flex", flexDirection: "column", gap: 2 }}>
+      <div style={{ position: "absolute", top: 10, left: 10, width: 10, height: 10, borderRadius: "50%", background: "var(--paper)", border: "1px solid var(--line)" }} />
+      <div style={{ position: "absolute", top: 8, right: 8, display: "flex", gap: 2 }}>
+        <button onClick={() => onEdit(item)} aria-label="編集" style={{ width: 22, height: 22, border: "none", background: "transparent", color: "var(--ink-soft)", fontFamily: "'JetBrains Mono', monospace", fontSize: 12, cursor: "pointer", lineHeight: 1 }}>編集</button>
+        <button onClick={() => onDelete(item.id)} aria-label="削除" style={{ width: 22, height: 22, border: "none", background: "transparent", color: "var(--ink-soft)", fontFamily: "'JetBrains Mono', monospace", fontSize: 14, cursor: "pointer", lineHeight: 1 }}>×</button>
+      </div>
+
+      <div style={{ marginLeft: 20, marginTop: -2, marginRight: 44 }}>
+        <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 10, letterSpacing: "0.08em", color: "var(--ink-soft)", textTransform: "uppercase" }}>{item.category}</div>
+        <div style={{ fontSize: 15, fontWeight: 700, color: "var(--ink)", marginTop: 3, lineHeight: 1.3, display: "flex", alignItems: "center", gap: 8 }}>
+          {item.name}
+          {item.tag === "備品" && item.registered && (
+            <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 10, padding: "2px 6px", borderRadius: 2, color: "var(--green)", background: "var(--green-bg)" }}>登録あり</span>
+          )}
+        </div>
+        {item.detail && <div style={{ fontSize: 12, color: "var(--ink-soft)", marginTop: 2, lineHeight: 1.4 }}>{item.detail}</div>}
+      </div>
+
+      {item.photo && (
+        <img src={item.photo} alt={item.name} style={{ width: "100%", height: 110, objectFit: "cover", borderRadius: 2, border: "1px solid var(--line)", marginTop: 10 }} />
+      )}
+
+      <div style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 4 }}>
+        <div style={{ fontSize: 12, color: "var(--ink)" }}><span style={{ fontFamily: "'JetBrains Mono', monospace", color: "var(--ink-soft)" }}>保管場所　</span>{item.location || "未設定"}</div>
+        <div style={{ fontSize: 12, color: "var(--ink)" }}><span style={{ fontFamily: "'JetBrains Mono', monospace", color: "var(--ink-soft)" }}>購入業者　</span>{item.vendor || "未設定"}</div>
+      </div>
+    </div>
+  );
+}
+
+function ListManager({ title, items, onChange, onClose, placeholder, requiredText, duplicateText, emptyText }) {
+  const [newItem, setNewItem] = useState("");
+  const [error, setError] = useState("");
+
+  const addItem = () => {
+    const v = newItem.trim();
+    if (!v) { setError(requiredText); return; }
+    if (items.includes(v)) { setError(duplicateText); return; }
+    onChange([...items, v]);
+    setNewItem("");
+    setError("");
+  };
+  const removeItem = (val) => onChange(items.filter((l) => l !== val));
+  const moveItem = (index, dir) => {
+    const target = index + dir;
+    if (target < 0 || target >= items.length) return;
+    const next = items.slice();
+    const [moved] = next.splice(index, 1);
+    next.splice(target, 0, moved);
+    onChange(next);
+  };
+
+  return (
+    <div style={{ background: "var(--card)", border: "1px solid var(--line)", borderRadius: 3, padding: 16, marginBottom: 20 }}>
+      <div style={LABEL_STYLE}>{title}</div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 8 }}>
+        {items.length === 0 && <div style={{ fontSize: 12, color: "var(--ink-soft)" }}>{emptyText}</div>}
+        {items.map((val, i) => (
+          <div key={val} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, padding: "6px 6px 6px 12px", border: "1px solid var(--line)", borderRadius: 2, color: "var(--ink)", background: "var(--paper)" }}>
+            <span style={{ flex: 1 }}>{val}</span>
+            <button onClick={() => moveItem(i, -1)} disabled={i === 0} aria-label={`${val}を上へ`} style={{ border: "none", background: "transparent", color: i === 0 ? "var(--line)" : "var(--ink-soft)", fontFamily: "'JetBrains Mono', monospace", fontSize: 13, cursor: i === 0 ? "default" : "pointer", lineHeight: 1, padding: "0 4px" }}>↑</button>
+            <button onClick={() => moveItem(i, 1)} disabled={i === items.length - 1} aria-label={`${val}を下へ`} style={{ border: "none", background: "transparent", color: i === items.length - 1 ? "var(--line)" : "var(--ink-soft)", fontFamily: "'JetBrains Mono', monospace", fontSize: 13, cursor: i === items.length - 1 ? "default" : "pointer", lineHeight: 1, padding: "0 4px" }}>↓</button>
+            <button onClick={() => removeItem(val)} aria-label={`${val}を削除`} style={{ border: "none", background: "transparent", color: "var(--ink-soft)", fontFamily: "'JetBrains Mono', monospace", fontSize: 14, cursor: "pointer", lineHeight: 1, padding: "0 4px" }}>×</button>
+          </div>
+        ))}
+      </div>
+      <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
+        <input style={INPUT_STYLE} value={newItem} onChange={(e) => setNewItem(e.target.value)} placeholder={placeholder} />
+        <button onClick={addItem} style={{ flexShrink: 0, padding: "0 16px", fontFamily: "'JetBrains Mono', monospace", fontSize: 13, border: "1px solid var(--ink)", background: "var(--ink)", color: "var(--card)", borderRadius: 2, cursor: "pointer" }}>追加</button>
+      </div>
+      {error && <div style={{ color: "var(--red)", fontSize: 12, marginTop: 8 }}>{error}</div>}
+      <button onClick={onClose} style={{ marginTop: 14, padding: "8px 16px", fontFamily: "'JetBrains Mono', monospace", fontSize: 13, border: "1px solid var(--line)", background: "transparent", color: "var(--ink-soft)", borderRadius: 2, cursor: "pointer" }}>閉じる</button>
+    </div>
+  );
+}
+
+function AddForm({ onAdd, onClose, locations, categories, activeTag, editingItem, onEditLocations, onEditCategories }) {
+  const [name, setName] = useState(editingItem ? editingItem.name : "");
+  const [detail, setDetail] = useState(editingItem ? editingItem.detail : "");
+  const [tag, setTag] = useState(editingItem ? editingItem.tag : activeTag);
+  const [category, setCategory] = useState(editingItem ? editingItem.category : categories[0] || "");
+  const [location, setLocation] = useState(editingItem ? editingItem.location : locations[0] || "");
+  const [vendor, setVendor] = useState(editingItem ? editingItem.vendor : "");
+  const [registered, setRegistered] = useState(editingItem ? !!editingItem.registered : false);
+  const [photo, setPhoto] = useState(editingItem ? editingItem.photo || "" : "");
+  const [photoError, setPhotoError] = useState("");
+  const [error, setError] = useState("");
+
+  const handlePhotoChange = async (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    setPhotoError("");
+    try {
+      const dataUrl = await resizeImage(file, 800, 0.75);
+      setPhoto(dataUrl);
+    } catch (err) {
+      setPhotoError("写真の読み込みに失敗しました");
+    }
+  };
+
+  const submit = () => {
+    if (!name.trim()) { setError("名称を入力してください"); return; }
+    onAdd({
+      id: editingItem ? editingItem.id : null,
+      name: name.trim(),
+      detail: detail.trim(),
+      tag,
+      category,
+      location,
+      vendor: vendor.trim(),
+      registered: tag === "備品" ? registered : false,
+      photo,
+    });
+    onClose();
+  };
+
+  const inputStyle = INPUT_STYLE;
+  const labelStyle = LABEL_STYLE;
+
+  return (
+    <div style={{ background: "var(--card)", border: "1px solid var(--line)", borderRadius: 3, padding: 16, marginBottom: 20 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+        <div style={{ gridColumn: "1 / -1" }}>
+          <label style={labelStyle}>名称</label>
+          <input style={inputStyle} value={name} onChange={(e) => setName(e.target.value)} placeholder="例: トイレットペーパー" />
+        </div>
+        <div style={{ gridColumn: "1 / -1" }}>
+          <label style={labelStyle}>詳細（色、サイズなど）</label>
+          <input style={inputStyle} value={detail} onChange={(e) => setDetail(e.target.value)} placeholder="例: ホワイト・ダブル巻き" />
+        </div>
+        <div>
+          <label style={labelStyle}>タグ</label>
+          <select style={inputStyle} value={tag} onChange={(e) => setTag(e.target.value)}>
+            {TAG_OPTIONS.map((t) => <option key={t} value={t}>{t}</option>)}
+          </select>
+        </div>
+        {tag === "備品" && (
+          <div style={{ display: "flex", alignItems: "flex-end", paddingBottom: 8 }}>
+            <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: "var(--ink)", cursor: "pointer" }}>
+              <input type="checkbox" checked={registered} onChange={(e) => setRegistered(e.target.checked)} style={{ width: 16, height: 16, accentColor: "var(--ink)" }} />
+              登録あり
+            </label>
+          </div>
+        )}
+        <div>
+          <label style={labelStyle}>カテゴリ</label>
+          <div style={{ display: "flex", gap: 6 }}>
+            <select style={inputStyle} value={category} onChange={(e) => setCategory(e.target.value)}>
+              {categories.map((c) => <option key={c} value={c}>{c}</option>)}
+            </select>
+            <button type="button" onClick={onEditCategories} style={{ flexShrink: 0, padding: "0 10px", fontFamily: "'JetBrains Mono', monospace", fontSize: 12, border: "1px solid var(--line)", background: "transparent", color: "var(--ink-soft)", borderRadius: 2, cursor: "pointer" }}>編集</button>
+          </div>
+        </div>
+        <div>
+          <label style={labelStyle}>保管場所</label>
+          <div style={{ display: "flex", gap: 6 }}>
+            <select style={inputStyle} value={location} onChange={(e) => setLocation(e.target.value)}>
+              {locations.map((l) => <option key={l} value={l}>{l}</option>)}
+            </select>
+            <button type="button" onClick={onEditLocations} style={{ flexShrink: 0, padding: "0 10px", fontFamily: "'JetBrains Mono', monospace", fontSize: 12, border: "1px solid var(--line)", background: "transparent", color: "var(--ink-soft)", borderRadius: 2, cursor: "pointer" }}>編集</button>
+          </div>
+        </div>
+        <div style={{ gridColumn: "1 / -1" }}>
+          <label style={labelStyle}>購入業者（社名、カタログページなど自由記述）</label>
+          <input style={inputStyle} value={vendor} onChange={(e) => setVendor(e.target.value)} placeholder="例: 〇〇商事 https://example.com/catalog" />
+        </div>
+        <div style={{ gridColumn: "1 / -1" }}>
+          <label style={labelStyle}>写真</label>
+          <input style={inputStyle} type="file" accept="image/*" onChange={handlePhotoChange} />
+          {photoError && <div style={{ color: "var(--red)", fontSize: 12, marginTop: 6 }}>{photoError}</div>}
+          {photo && (
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 8 }}>
+              <img src={photo} alt="プレビュー" style={{ width: 64, height: 64, objectFit: "cover", borderRadius: 2, border: "1px solid var(--line)" }} />
+              <button type="button" onClick={() => setPhoto("")} style={{ padding: "6px 10px", fontFamily: "'JetBrains Mono', monospace", fontSize: 12, border: "1px solid var(--line)", background: "transparent", color: "var(--ink-soft)", borderRadius: 2, cursor: "pointer" }}>写真を削除</button>
+            </div>
+          )}
+        </div>
+      </div>
+      {error && <div style={{ color: "var(--red)", fontSize: 12, marginTop: 8 }}>{error}</div>}
+      <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
+        <button onClick={submit} style={{ padding: "8px 16px", fontFamily: "'JetBrains Mono', monospace", fontSize: 13, border: "1px solid var(--ink)", background: "var(--ink)", color: "var(--card)", borderRadius: 2, cursor: "pointer" }}>{editingItem ? "保存する" : "追加する"}</button>
+        <button onClick={onClose} style={{ padding: "8px 16px", fontFamily: "'JetBrains Mono', monospace", fontSize: 13, border: "1px solid var(--line)", background: "transparent", color: "var(--ink-soft)", borderRadius: 2, cursor: "pointer" }}>キャンセル</button>
+      </div>
+    </div>
+  );
+}
+
+function ConsumablesTracker() {
+  const [items, setItems] = useState([]);
+  const [locations, setLocations] = useState(LOCATION_PRESETS);
+  const [categories, setCategories] = useState(CATEGORY_PRESETS);
+  const [activeTag, setActiveTag] = useState(TAG_OPTIONS[0]);
+  const [categoryFilter, setCategoryFilter] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [showForm, setShowForm] = useState(false);
+  const [editingItem, setEditingItem] = useState(null);
+  const [showLocationManager, setShowLocationManager] = useState(false);
+  const [showCategoryManager, setShowCategoryManager] = useState(false);
+  const [storageError, setStorageError] = useState(false);
+
+  // Realtime sync from Firestore
+  useEffect(() => {
+    const unsubItems = db.collection("items").onSnapshot(
+      (snap) => {
+        setItems(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+        setLoading(false);
+      },
+      () => setStorageError(true)
+    );
+    const unsubCats = db.collection("meta").doc("categories").onSnapshot(
+      (doc) => { if (doc.exists && doc.data().list) setCategories(doc.data().list); },
+      () => setStorageError(true)
+    );
+    const unsubLocs = db.collection("meta").doc("locations").onSnapshot(
+      (doc) => { if (doc.exists && doc.data().list) setLocations(doc.data().list); },
+      () => setStorageError(true)
+    );
+    return () => { unsubItems(); unsubCats(); unsubLocs(); };
+  }, []);
+
+  const persistLocations = useCallback(async (next) => {
+    setLocations(next);
+    try {
+      await db.collection("meta").doc("locations").set({ list: next });
+    } catch (e) { setStorageError(true); }
+  }, []);
+
+  const persistCategories = useCallback(async (next) => {
+    setCategories(next);
+    try {
+      await db.collection("meta").doc("categories").set({ list: next });
+    } catch (e) { setStorageError(true); }
+  }, []);
+
+  const saveItem = async (item) => {
+    try {
+      if (item.id) {
+        const { id, ...data } = item;
+        await db.collection("items").doc(id).set(data);
+      } else {
+        const { id, ...data } = item;
+        await db.collection("items").add(data);
+      }
+    } catch (e) { setStorageError(true); }
+  };
+
+  const deleteItem = async (id) => {
+    try {
+      await db.collection("items").doc(id).delete();
+    } catch (e) { setStorageError(true); }
+  };
+
+  const tagItems = items.filter((i) => i.tag === activeTag);
+  const visibleItems = categoryFilter ? tagItems.filter((i) => i.category === categoryFilter) : tagItems;
+  const grouped = visibleItems.reduce((acc, item) => { acc[item.category] = acc[item.category] || []; acc[item.category].push(item); return acc; }, {});
+  const orderedCategories = [...categories.filter((c) => grouped[c]), ...Object.keys(grouped).filter((c) => !categories.includes(c))];
+
+  return (
+    <div style={{
+      "--paper": "#EDE6D3", "--card": "#FBF7EC", "--ink": "#2B2A22", "--ink-soft": "#6E6852", "--line": "#C7BC9C",
+      "--green": "#4F6B47", "--green-bg": "#E3EADA", "--amber": "#B96A1F", "--amber-bg": "#F4E1C3", "--red": "#A6362C", "--red-bg": "#F1D8D3",
+      background: "var(--paper)", minHeight: "100vh", padding: "28px 20px 60px", fontFamily: "'Zen Kaku Gothic New', sans-serif", color: "var(--ink)"
+    }}>
+      <div style={{ maxWidth: 880, margin: "0 auto" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 12 }}>
+          <div>
+            <h1 style={{ fontSize: 24, fontWeight: 700, margin: 0 }}>備品・消耗品　管理アプリ</h1>
+            <p style={{ fontSize: 13, color: "var(--ink-soft)", margin: "6px 0 0", lineHeight: 1.5 }}>「あれ、どこだっけ」がなくなります。</p>
+            <p style={{ fontSize: 11, color: "var(--ink-soft)", margin: "4px 0 0" }}>※ここに登録した内容は、このアプリを使う全員にリアルタイムで共有されます。</p>
+          </div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <button onClick={() => { setShowCategoryManager((s) => !s); setShowForm(false); setEditingItem(null); setShowLocationManager(false); }} style={{ padding: "9px 14px", fontFamily: "'JetBrains Mono', monospace", fontSize: 13, border: "1px solid var(--line)", background: "transparent", color: "var(--ink-soft)", borderRadius: 2, cursor: "pointer", height: "fit-content" }}>カテゴリを編集</button>
+            <button onClick={() => { setShowLocationManager((s) => !s); setShowForm(false); setEditingItem(null); setShowCategoryManager(false); }} style={{ padding: "9px 14px", fontFamily: "'JetBrains Mono', monospace", fontSize: 13, border: "1px solid var(--line)", background: "transparent", color: "var(--ink-soft)", borderRadius: 2, cursor: "pointer", height: "fit-content" }}>保管場所を編集</button>
+            <button onClick={() => { setShowForm((s) => !s); setEditingItem(null); setShowLocationManager(false); setShowCategoryManager(false); }} style={{ padding: "9px 18px", fontFamily: "'JetBrains Mono', monospace", fontSize: 13, border: "1px solid var(--ink)", background: showForm ? "transparent" : "var(--ink)", color: showForm ? "var(--ink)" : "var(--card)", borderRadius: 2, cursor: "pointer", height: "fit-content" }}>{showForm ? "閉じる" : "＋ 品目を追加"}</button>
+          </div>
+        </div>
+
+        <div style={{ display: "flex", gap: 0, marginTop: 20, borderBottom: "1px solid var(--line)" }}>
+          {TAG_OPTIONS.map((t) => (
+            <button key={t} onClick={() => { setActiveTag(t); setCategoryFilter(""); }} style={{ padding: "9px 20px", fontFamily: "'JetBrains Mono', monospace", fontSize: 13, border: "none", borderBottom: activeTag === t ? "2px solid var(--ink)" : "2px solid transparent", marginBottom: -1, background: "transparent", color: activeTag === t ? "var(--ink)" : "var(--ink-soft)", cursor: "pointer" }}>{t}</button>
+          ))}
+        </div>
+
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 16, marginBottom: 20, flexWrap: "wrap" }}>
+          <label style={{ ...LABEL_STYLE, marginBottom: 0 }}>カテゴリで検索</label>
+          <select style={{ ...INPUT_STYLE, width: "auto", minWidth: 160 }} value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)}>
+            <option value="">すべてのカテゴリ</option>
+            {categories.map((c) => <option key={c} value={c}>{c}</option>)}
+          </select>
+          <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12, color: "var(--ink-soft)" }}>{visibleItems.length}件</div>
+          {storageError && <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12, color: "var(--red)" }}>保存に失敗しました（Firebase設定をご確認ください）</div>}
+        </div>
+
+        {showCategoryManager && (
+          <ListManager title="カテゴリの一覧" items={categories} onChange={persistCategories} onClose={() => setShowCategoryManager(false)} placeholder="例: 医薬品" requiredText="カテゴリ名を入力してください" duplicateText="すでに登録されています" emptyText="登録されたカテゴリがありません。" />
+        )}
+        {showLocationManager && (
+          <ListManager title="保管場所の一覧" items={locations} onChange={persistLocations} onClose={() => setShowLocationManager(false)} placeholder="例: 廊下収納" requiredText="保管場所名を入力してください" duplicateText="すでに登録されています" emptyText="登録された保管場所がありません。" />
+        )}
+        {(showForm || editingItem) && (
+          <AddForm
+            onAdd={saveItem}
+            onClose={() => { setShowForm(false); setEditingItem(null); }}
+            locations={locations}
+            categories={categories}
+            activeTag={activeTag}
+            editingItem={editingItem}
+            onEditLocations={() => { setShowForm(false); setShowLocationManager(true); }}
+            onEditCategories={() => { setShowForm(false); setShowCategoryManager(true); }}
+          />
+        )}
+
+        {loading ? (
+          <div style={{ color: "var(--ink-soft)", fontSize: 14 }}>読み込み中…</div>
+        ) : visibleItems.length === 0 ? (
+          <div style={{ border: "1px dashed var(--line)", borderRadius: 3, padding: "40px 20px", textAlign: "center", color: "var(--ink-soft)" }}>
+            <div style={{ fontSize: 14 }}>{items.length === 0 ? `まだ登録した${activeTag}がありません。` : `該当する${activeTag}がありません。`}</div>
+            <div style={{ fontSize: 13, marginTop: 4 }}>「＋ 品目を追加」から最初のタグを作成してください。</div>
+          </div>
+        ) : (
+          orderedCategories.map((cat) => (
+            <div key={cat} style={{ marginBottom: 26 }}>
+              <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11, letterSpacing: "0.08em", color: "var(--ink-soft)", textTransform: "uppercase", borderBottom: "1px solid var(--line)", paddingBottom: 6, marginBottom: 12 }}>{cat} ({grouped[cat].length})</div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 14 }}>
+                {grouped[cat].map((item) => (
+                  <ItemCard key={item.id} item={item} onDelete={deleteItem} onEdit={(it) => { setEditingItem(it); setShowForm(false); setShowLocationManager(false); setShowCategoryManager(false); }} />
+                ))}
+              </div>
+            </div>
+          ))
+        )}
+      </div>
+    </div>
+  );
+}
+
+function App() {
+  const [authReady, setAuthReady] = useState(false);
+  const [authError, setAuthError] = useState(false);
+
+  useEffect(() => {
+    const unsub = auth.onAuthStateChanged((user) => {
+      if (user) setAuthReady(true);
+    });
+    auth.signInAnonymously().catch(() => setAuthError(true));
+    return unsub;
+  }, []);
+
+  if (authError) {
+    return (
+      <div style={{ padding: 40, fontFamily: "'Zen Kaku Gothic New', sans-serif", color: "#A6362C" }}>
+        認証に失敗しました。Firebaseコンソールで「Authentication → Sign-in method → 匿名」を有効にしてください。
+      </div>
+    );
+  }
+  if (!authReady) {
+    return <div style={{ padding: 40, fontFamily: "'Zen Kaku Gothic New', sans-serif", color: "#6E6852" }}>読み込み中…</div>;
+  }
+  return <ConsumablesTracker />;
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>
