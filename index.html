@@ -28,6 +28,30 @@
 </div>
 
 <script>
+  // 開発者ツールが使えない環境でも原因が分かるように、
+  // 画面上に直接エラーを表示する
+  function showFatalError(message) {
+    var root = document.getElementById("root");
+    if (root) {
+      root.innerHTML =
+        '<div style="padding:40px;font-family:sans-serif;color:#A6362C;white-space:pre-wrap;">' +
+        '読み込みに失敗しました。以下のエラー内容を開発者に伝えてください。\n\n' +
+        message +
+        '</div>';
+    }
+  }
+  window.addEventListener("error", function (e) {
+    showFatalError((e.message || "unknown error") + "\n(" + (e.filename || "") + ":" + (e.lineno || "") + ")");
+  });
+  window.addEventListener("unhandledrejection", function (e) {
+    var reason = e.reason;
+    var msg = reason && reason.message ? reason.message : String(reason);
+    var code = reason && reason.code ? " [" + reason.code + "]" : "";
+    showFatalError(msg + code);
+  });
+</script>
+
+<script>
   // ------------------------------------------------------------------
   // 1) Firebase の設定をここに貼り付けてください
   //    Firebase コンソール > プロジェクトの設定 > 全般 > マイアプリ から取得できます
@@ -308,24 +332,25 @@ function ConsumablesTracker() {
   const [editingItem, setEditingItem] = useState(null);
   const [showLocationManager, setShowLocationManager] = useState(false);
   const [showCategoryManager, setShowCategoryManager] = useState(false);
-  const [storageError, setStorageError] = useState(false);
+  const [storageError, setStorageError] = useState("");
 
   // Realtime sync from Firestore
   useEffect(() => {
+    const describeErr = (err) => (err && err.code ? err.code + ": " : "") + (err && err.message ? err.message : "読み込みエラー");
     const unsubItems = db.collection("items").onSnapshot(
       (snap) => {
         setItems(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
         setLoading(false);
       },
-      () => setStorageError(true)
+      (err) => { setLoading(false); setStorageError(describeErr(err)); }
     );
     const unsubCats = db.collection("meta").doc("categories").onSnapshot(
       (doc) => { if (doc.exists && doc.data().list) setCategories(doc.data().list); },
-      () => setStorageError(true)
+      (err) => setStorageError(describeErr(err))
     );
     const unsubLocs = db.collection("meta").doc("locations").onSnapshot(
       (doc) => { if (doc.exists && doc.data().list) setLocations(doc.data().list); },
-      () => setStorageError(true)
+      (err) => setStorageError(describeErr(err))
     );
     return () => { unsubItems(); unsubCats(); unsubLocs(); };
   }, []);
@@ -334,14 +359,14 @@ function ConsumablesTracker() {
     setLocations(next);
     try {
       await db.collection("meta").doc("locations").set({ list: next });
-    } catch (e) { setStorageError(true); }
+    } catch (e) { setStorageError((e.code ? e.code + ": " : "") + e.message); }
   }, []);
 
   const persistCategories = useCallback(async (next) => {
     setCategories(next);
     try {
       await db.collection("meta").doc("categories").set({ list: next });
-    } catch (e) { setStorageError(true); }
+    } catch (e) { setStorageError((e.code ? e.code + ": " : "") + e.message); }
   }, []);
 
   const saveItem = async (item) => {
@@ -353,13 +378,13 @@ function ConsumablesTracker() {
         const { id, ...data } = item;
         await db.collection("items").add(data);
       }
-    } catch (e) { setStorageError(true); }
+    } catch (e) { setStorageError((e.code ? e.code + ": " : "") + e.message); }
   };
 
   const deleteItem = async (id) => {
     try {
       await db.collection("items").doc(id).delete();
-    } catch (e) { setStorageError(true); }
+    } catch (e) { setStorageError((e.code ? e.code + ": " : "") + e.message); }
   };
 
   const tagItems = items.filter((i) => i.tag === activeTag);
@@ -400,7 +425,7 @@ function ConsumablesTracker() {
             {categories.map((c) => <option key={c} value={c}>{c}</option>)}
           </select>
           <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12, color: "var(--ink-soft)" }}>{visibleItems.length}件</div>
-          {storageError && <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12, color: "var(--red)" }}>保存に失敗しました（Firebase設定をご確認ください）</div>}
+          {storageError && <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12, color: "var(--red)" }}>エラー: {storageError}</div>}
         </div>
 
         {showCategoryManager && (
@@ -448,20 +473,24 @@ function ConsumablesTracker() {
 
 function App() {
   const [authReady, setAuthReady] = useState(false);
-  const [authError, setAuthError] = useState(false);
+  const [authError, setAuthError] = useState("");
 
   useEffect(() => {
     const unsub = auth.onAuthStateChanged((user) => {
       if (user) setAuthReady(true);
     });
-    auth.signInAnonymously().catch(() => setAuthError(true));
+    auth.signInAnonymously().catch((err) => {
+      setAuthError((err && err.code ? err.code + ": " : "") + (err && err.message ? err.message : "認証エラー"));
+    });
     return unsub;
   }, []);
 
   if (authError) {
     return (
-      <div style={{ padding: 40, fontFamily: "'Zen Kaku Gothic New', sans-serif", color: "#A6362C" }}>
-        認証に失敗しました。Firebaseコンソールで「Authentication → Sign-in method → 匿名」を有効にしてください。
+      <div style={{ padding: 40, fontFamily: "'Zen Kaku Gothic New', sans-serif", color: "#A6362C", whiteSpace: "pre-wrap" }}>
+        認証に失敗しました。Firebaseコンソールで「Authentication → Sign-in method → 匿名」が有効か、
+        「Authentication → Settings → 承認済みドメイン」にこのサイトのドメインが登録されているかご確認ください。
+        {"\n\n"}詳細: {authError}
       </div>
     );
   }
