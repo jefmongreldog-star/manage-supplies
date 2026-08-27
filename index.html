@@ -11,7 +11,7 @@
 
 <!-- Firebase (compat build, easiest to combine with the script below) -->
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
 
 <style>
@@ -59,13 +59,14 @@
   const firebaseConfig = {
     apiKey: "AIzaSyBpun4Vvt65UDwFYHQ0IE2zGvaKA2mdJ9U",
     authDomain: "manage-supplies.firebaseapp.com",
+    databaseURL: "https://manage-supplies-default-rtdb.asia-southeast1.firebasedatabase.app/",
     projectId: "manage-supplies",
     storageBucket: "manage-supplies.firebasestorage.app",
     messagingSenderId: "624069850997",
     appId: "1:624069850997:web:2702ff67af089a0a54853c"
   };
   firebase.initializeApp(firebaseConfig);
-  const db = firebase.firestore();
+  const db = firebase.database();
   const auth = firebase.auth();
   window.__db = db;
   window.__auth = auth;
@@ -334,38 +335,50 @@ function ConsumablesTracker() {
   const [showCategoryManager, setShowCategoryManager] = useState(false);
   const [storageError, setStorageError] = useState("");
 
-  // Realtime sync from Firestore
+  // Realtime sync from Realtime Database
   useEffect(() => {
     const describeErr = (err) => (err && err.code ? err.code + ": " : "") + (err && err.message ? err.message : "読み込みエラー");
-    const unsubItems = db.collection("items").onSnapshot(
+    const itemsRef = db.ref("items");
+    const catsRef = db.ref("meta/categories");
+    const locsRef = db.ref("meta/locations");
+
+    const onItems = itemsRef.on(
+      "value",
       (snap) => {
-        setItems(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+        const val = snap.val() || {};
+        setItems(Object.keys(val).map((id) => ({ id, ...val[id] })));
         setLoading(false);
       },
       (err) => { setLoading(false); setStorageError(describeErr(err)); }
     );
-    const unsubCats = db.collection("meta").doc("categories").onSnapshot(
-      (doc) => { if (doc.exists && doc.data().list) setCategories(doc.data().list); },
+    const onCats = catsRef.on(
+      "value",
+      (snap) => { const val = snap.val(); if (val && val.list) setCategories(val.list); },
       (err) => setStorageError(describeErr(err))
     );
-    const unsubLocs = db.collection("meta").doc("locations").onSnapshot(
-      (doc) => { if (doc.exists && doc.data().list) setLocations(doc.data().list); },
+    const onLocs = locsRef.on(
+      "value",
+      (snap) => { const val = snap.val(); if (val && val.list) setLocations(val.list); },
       (err) => setStorageError(describeErr(err))
     );
-    return () => { unsubItems(); unsubCats(); unsubLocs(); };
+    return () => {
+      itemsRef.off("value", onItems);
+      catsRef.off("value", onCats);
+      locsRef.off("value", onLocs);
+    };
   }, []);
 
   const persistLocations = useCallback(async (next) => {
     setLocations(next);
     try {
-      await db.collection("meta").doc("locations").set({ list: next });
+      await db.ref("meta/locations").set({ list: next });
     } catch (e) { setStorageError((e.code ? e.code + ": " : "") + e.message); }
   }, []);
 
   const persistCategories = useCallback(async (next) => {
     setCategories(next);
     try {
-      await db.collection("meta").doc("categories").set({ list: next });
+      await db.ref("meta/categories").set({ list: next });
     } catch (e) { setStorageError((e.code ? e.code + ": " : "") + e.message); }
   }, []);
 
@@ -373,17 +386,17 @@ function ConsumablesTracker() {
     try {
       if (item.id) {
         const { id, ...data } = item;
-        await db.collection("items").doc(id).set(data);
+        await db.ref("items/" + id).set(data);
       } else {
         const { id, ...data } = item;
-        await db.collection("items").add(data);
+        await db.ref("items").push(data);
       }
     } catch (e) { setStorageError((e.code ? e.code + ": " : "") + e.message); }
   };
 
   const deleteItem = async (id) => {
     try {
-      await db.collection("items").doc(id).delete();
+      await db.ref("items/" + id).remove();
     } catch (e) { setStorageError((e.code ? e.code + ": " : "") + e.message); }
   };
 
@@ -474,15 +487,18 @@ function ConsumablesTracker() {
 function App() {
   const [authReady, setAuthReady] = useState(false);
   const [authError, setAuthError] = useState("");
+  const [slow, setSlow] = useState(false);
 
   useEffect(() => {
+    const timer = setTimeout(() => setSlow(true), 8000);
     const unsub = auth.onAuthStateChanged((user) => {
-      if (user) setAuthReady(true);
+      if (user) { setAuthReady(true); clearTimeout(timer); }
     });
     auth.signInAnonymously().catch((err) => {
+      clearTimeout(timer);
       setAuthError((err && err.code ? err.code + ": " : "") + (err && err.message ? err.message : "認証エラー"));
     });
-    return unsub;
+    return () => { unsub(); clearTimeout(timer); };
   }, []);
 
   if (authError) {
@@ -491,6 +507,16 @@ function App() {
         認証に失敗しました。Firebaseコンソールで「Authentication → Sign-in method → 匿名」が有効か、
         「Authentication → Settings → 承認済みドメイン」にこのサイトのドメインが登録されているかご確認ください。
         {"\n\n"}詳細: {authError}
+      </div>
+    );
+  }
+  if (!authReady && slow) {
+    return (
+      <div style={{ padding: 40, fontFamily: "'Zen Kaku Gothic New', sans-serif", color: "#A6362C", whiteSpace: "pre-wrap" }}>
+        8秒以上応答がありません。Firebaseへの通信がこのネットワークでブロックされている可能性があります
+        （社内ネットワークやセキュリティソフトのフィルタリングなど）。{"\n\n"}
+        お手数ですが、スマートフォンのモバイル通信（Wi-Fiを切った状態）など、別のネットワークで
+        このページを開いて、同じ状態になるか確認してみてください。
       </div>
     );
   }
