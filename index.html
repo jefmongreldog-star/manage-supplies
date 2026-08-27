@@ -11,7 +11,6 @@
 
 <!-- Firebase (compat build, easiest to combine with the script below) -->
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
 
 <style>
@@ -66,16 +65,29 @@
     appId: "1:624069850997:web:2702ff67af089a0a54853c"
   };
   firebase.initializeApp(firebaseConfig);
-  const db = firebase.database();
   const auth = firebase.auth();
-  window.__db = db;
   window.__auth = auth;
+  window.__DB_URL = firebaseConfig.databaseURL.replace(/\/$/, "");
+
+  // Realtime Database の REST API を、認証トークンを付けて呼び出す共通関数
+  window.__authedFetch = async function (path, options) {
+    const user = auth.currentUser;
+    if (!user) throw new Error("認証されていません");
+    const token = await user.getIdToken();
+    const sep = path.includes("?") ? "&" : "?";
+    const res = await fetch(window.__DB_URL + path + sep + "auth=" + token, options);
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      throw new Error("HTTP " + res.status + (text ? ": " + text : ""));
+    }
+    return res;
+  };
 </script>
 
 <script type="text/babel" data-presets="react">
 const { useState, useEffect, useCallback } = React;
-const db = window.__db;
 const auth = window.__auth;
+const authedFetch = window.__authedFetch;
 
 const CATEGORY_PRESETS = ["キッチン", "洗面・浴室", "掃除用品", "文具・オフィス", "ペット用品", "その他"];
 const LOCATION_PRESETS = ["キッチン収納", "洗面台下", "納戸", "玄関", "その他"];
@@ -335,69 +347,91 @@ function ConsumablesTracker() {
   const [showCategoryManager, setShowCategoryManager] = useState(false);
   const [storageError, setStorageError] = useState("");
 
-  // Realtime sync from Realtime Database
-  useEffect(() => {
-    const describeErr = (err) => (err && err.code ? err.code + ": " : "") + (err && err.message ? err.message : "読み込みエラー");
-    const itemsRef = db.ref("items");
-    const catsRef = db.ref("meta/categories");
-    const locsRef = db.ref("meta/locations");
-
-    const onItems = itemsRef.on(
-      "value",
-      (snap) => {
-        const val = snap.val() || {};
-        setItems(Object.keys(val).map((id) => ({ id, ...val[id] })));
-        setLoading(false);
-      },
-      (err) => { setLoading(false); setStorageError(describeErr(err)); }
-    );
-    const onCats = catsRef.on(
-      "value",
-      (snap) => { const val = snap.val(); if (val && val.list) setCategories(val.list); },
-      (err) => setStorageError(describeErr(err))
-    );
-    const onLocs = locsRef.on(
-      "value",
-      (snap) => { const val = snap.val(); if (val && val.list) setLocations(val.list); },
-      (err) => setStorageError(describeErr(err))
-    );
-    return () => {
-      itemsRef.off("value", onItems);
-      catsRef.off("value", onCats);
-      locsRef.off("value", onLocs);
-    };
+  const loadAll = useCallback(async () => {
+    try {
+      const [itemsRes, catsRes, locsRes] = await Promise.all([
+        authedFetch("/items.json"),
+        authedFetch("/meta/categories.json"),
+        authedFetch("/meta/locations.json"),
+      ]);
+      const [itemsVal, catsVal, locsVal] = await Promise.all([itemsRes.json(), catsRes.json(), locsRes.json()]);
+      const itemsObj = itemsVal || {};
+      setItems(Object.keys(itemsObj).map((id) => ({ id, ...itemsObj[id] })));
+      if (catsVal && catsVal.list) setCategories(catsVal.list);
+      if (locsVal && locsVal.list) setLocations(locsVal.list);
+      setStorageError("");
+    } catch (e) {
+      setStorageError(e.message || "読み込みエラー");
+    } finally {
+      setLoading(false);
+    }
   }, []);
+
+  // 初回読み込み後、一定間隔で自動更新（他の人の変更を反映するため）
+  useEffect(() => {
+    let cancelled = false;
+    let interval;
+    const unsub = auth.onAuthStateChanged((user) => {
+      if (user && !cancelled) {
+        loadAll();
+        interval = setInterval(loadAll, 12000);
+      }
+    });
+    return () => {
+      cancelled = true;
+      unsub();
+      if (interval) clearInterval(interval);
+    };
+  }, [loadAll]);
 
   const persistLocations = useCallback(async (next) => {
     setLocations(next);
     try {
-      await db.ref("meta/locations").set({ list: next });
-    } catch (e) { setStorageError((e.code ? e.code + ": " : "") + e.message); }
+      await authedFetch("/meta/locations.json", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ list: next }),
+      });
+    } catch (e) { setStorageError(e.message || "保存エラー"); }
   }, []);
 
   const persistCategories = useCallback(async (next) => {
     setCategories(next);
     try {
-      await db.ref("meta/categories").set({ list: next });
-    } catch (e) { setStorageError((e.code ? e.code + ": " : "") + e.message); }
+      await authedFetch("/meta/categories.json", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ list: next }),
+      });
+    } catch (e) { setStorageError(e.message || "保存エラー"); }
   }, []);
 
   const saveItem = async (item) => {
     try {
       if (item.id) {
         const { id, ...data } = item;
-        await db.ref("items/" + id).set(data);
+        await authedFetch("/items/" + id + ".json", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(data),
+        });
       } else {
         const { id, ...data } = item;
-        await db.ref("items").push(data);
+        await authedFetch("/items.json", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(data),
+        });
       }
-    } catch (e) { setStorageError((e.code ? e.code + ": " : "") + e.message); }
+      await loadAll();
+    } catch (e) { setStorageError(e.message || "保存エラー"); }
   };
 
   const deleteItem = async (id) => {
     try {
-      await db.ref("items/" + id).remove();
-    } catch (e) { setStorageError((e.code ? e.code + ": " : "") + e.message); }
+      await authedFetch("/items/" + id + ".json", { method: "DELETE" });
+      await loadAll();
+    } catch (e) { setStorageError(e.message || "削除エラー"); }
   };
 
   const tagItems = items.filter((i) => i.tag === activeTag);
@@ -416,7 +450,7 @@ function ConsumablesTracker() {
           <div>
             <h1 style={{ fontSize: 24, fontWeight: 700, margin: 0 }}>備品・消耗品　管理アプリ</h1>
             <p style={{ fontSize: 13, color: "var(--ink-soft)", margin: "6px 0 0", lineHeight: 1.5 }}>「あれ、どこだっけ」がなくなります。</p>
-            <p style={{ fontSize: 11, color: "var(--ink-soft)", margin: "4px 0 0" }}>※ここに登録した内容は、このアプリを使う全員にリアルタイムで共有されます。</p>
+            <p style={{ fontSize: 11, color: "var(--ink-soft)", margin: "4px 0 0" }}>※ここに登録した内容は、このアプリを使う全員に共有されます（他の人の変更は自動で数秒〜十数秒ごとに反映されます。すぐ見たいときは「↻ 更新」を押してください）。</p>
           </div>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             <button onClick={() => { setShowCategoryManager((s) => !s); setShowForm(false); setEditingItem(null); setShowLocationManager(false); }} style={{ padding: "9px 14px", fontFamily: "'JetBrains Mono', monospace", fontSize: 13, border: "1px solid var(--line)", background: "transparent", color: "var(--ink-soft)", borderRadius: 2, cursor: "pointer", height: "fit-content" }}>カテゴリを編集</button>
@@ -438,6 +472,21 @@ function ConsumablesTracker() {
             {categories.map((c) => <option key={c} value={c}>{c}</option>)}
           </select>
           <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12, color: "var(--ink-soft)" }}>{visibleItems.length}件</div>
+          <button
+            onClick={loadAll}
+            style={{
+              padding: "5px 10px",
+              fontFamily: "'JetBrains Mono', monospace",
+              fontSize: 11,
+              border: "1px solid var(--line)",
+              background: "transparent",
+              color: "var(--ink-soft)",
+              borderRadius: 2,
+              cursor: "pointer",
+            }}
+          >
+            ↻ 更新
+          </button>
           {storageError && <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12, color: "var(--red)" }}>エラー: {storageError}</div>}
         </div>
 
