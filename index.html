@@ -7,6 +7,7 @@
 
 <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js" crossorigin></script>
 
 <!-- Firebase (compat build, easiest to combine with the script below) -->
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
@@ -49,48 +50,39 @@
   });
 </script>
 
-<script>
-  // ------------------------------------------------------------------
-  // 1) Firebase の設定をここに貼り付けてください
-  //    Firebase コンソール > プロジェクトの設定 > 全般 > マイアプリ から取得できます
-  // ------------------------------------------------------------------
-  const firebaseConfig = {
-    apiKey: "AIzaSyBpun4Vvt65UDwFYHQ0IE2zGvaKA2mdJ9U",
-    authDomain: "manage-supplies.firebaseapp.com",
-    databaseURL: "https://manage-supplies-default-rtdb.asia-southeast1.firebasedatabase.app/",
-    projectId: "manage-supplies",
-    storageBucket: "manage-supplies.firebasestorage.app",
-    messagingSenderId: "624069850997",
-    appId: "1:624069850997:web:2702ff67af089a0a54853c"
-  };
-  firebase.initializeApp(firebaseConfig);
-  const auth = firebase.auth();
-  window.__auth = auth;
-  window.__DB_URL = firebaseConfig.databaseURL.replace(/\/$/, "");
+<script type="text/babel">
+const { useState, useEffect, useCallback } = React;
 
-  // Realtime Database の REST API を、認証トークンを付けて呼び出す共通関数
-  window.__authedFetch = async function (path, options) {
-    const user = auth.currentUser;
-    if (!user) throw new Error("認証されていません");
-    const token = await user.getIdToken();
-    const sep = path.includes("?") ? "&" : "?";
-    const res = await fetch(window.__DB_URL + path + sep + "auth=" + token, options);
-    if (!res.ok) {
-      const text = await res.text().catch(() => "");
-      throw new Error("HTTP " + res.status + (text ? ": " + text : ""));
-    }
-    return res;
-  };
-</script>
+// ------------------------------------------------------------------
+// Firebase の設定
+// ------------------------------------------------------------------
+const firebaseConfig = {
+  apiKey: "AIzaSyBpun4Vvt65UDwFYHQ0IE2zGvaKA2mdJ9U",
+  authDomain: "manage-supplies.firebaseapp.com",
+  databaseURL: "https://manage-supplies-default-rtdb.asia-southeast1.firebasedatabase.app/",
+  projectId: "manage-supplies",
+  storageBucket: "manage-supplies.firebasestorage.app",
+  messagingSenderId: "624069850997",
+  appId: "1:624069850997:web:2702ff67af089a0a54853c"
+};
+firebase.initializeApp(firebaseConfig);
+const auth = firebase.auth();
+const DB_URL = firebaseConfig.databaseURL.replace(/\/$/, "");
 
-<script>
-const {
-  useState,
-  useEffect,
-  useCallback
-} = React;
-const auth = window.__auth;
-const authedFetch = window.__authedFetch;
+// Realtime Database の REST API を、認証トークンを付けて呼び出す共通関数
+async function authedFetch(path, options) {
+  const user = auth.currentUser;
+  if (!user) throw new Error("認証されていません");
+  const token = await user.getIdToken();
+  const sep = path.includes("?") ? "&" : "?";
+  const res = await fetch(DB_URL + path + sep + "auth=" + token, options);
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error("HTTP " + res.status + (text ? ": " + text : ""));
+  }
+  return res;
+}
+
 const CATEGORY_PRESETS = ["キッチン", "洗面・浴室", "掃除用品", "文具・オフィス", "ペット用品", "その他"];
 const LOCATION_PRESETS = ["キッチン収納", "洗面台下", "納戸", "玄関", "その他"];
 const TAG_OPTIONS = ["消耗品", "備品"];
