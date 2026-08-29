@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>備品・消耗品 管理アプリ</title>
+<title>消耗品・備品 覚書アプリ</title>
 
 <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
@@ -846,11 +846,11 @@ function ConsumablesTracker() {
   const orderedCategories = [...categories.filter(c => grouped[c]), ...Object.keys(grouped).filter(c => !categories.includes(c))];
   return /*#__PURE__*/React.createElement("div", {
     style: {
-      "--paper": "#EDE6D3",
-      "--card": "#FBF7EC",
-      "--ink": "#2B2A22",
-      "--ink-soft": "#6E6852",
-      "--line": "#C7BC9C",
+      "--paper": "#DFE8D6",
+      "--card": "#F3F7EE",
+      "--ink": "#26301F",
+      "--ink-soft": "#5E6E52",
+      "--line": "#B9C9A9",
       "--green": "#4F6B47",
       "--green-bg": "#E3EADA",
       "--amber": "#B96A1F",
@@ -882,7 +882,7 @@ function ConsumablesTracker() {
       fontWeight: 700,
       margin: 0
     }
-  }, "備品・消耗品\u3000管理アプリ"), /*#__PURE__*/React.createElement("p", {
+  }, "消耗品・備品\u3000覚書アプリ"), /*#__PURE__*/React.createElement("p", {
     style: {
       fontSize: 13,
       color: "var(--ink-soft)",
